@@ -1,5 +1,4 @@
 var request = require("request");
-var cheerio = require('cheerio');
 var fs = require('fs');
 var async = require('async');
 
@@ -10,37 +9,71 @@ var headers = {
     "Cache-Control": "max-age=0",
     "Connection": "keep-alive",
     "Host": "wy.guahao.com",
+    "Referer": "",
     'User-Agent': 'Mozilla/5.0 (Linux; Android 5.1.1; Nexus 6 Build/LYZ28E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/48.0.2564.23 Mobile Safari/537.36'
 };
 
-var seriesIds = [];
+// http://wy.guahao.com/fastorder/expertlist?hospitalId=448f9a19-8cd2-4ccf-a152-3930ec622d9f000&deptId=563cbb53-1294-4e46-a411-358dcff98f27000
+
+var expertlist = [];
+var reserveExpertlist = [];
 /**
  * 获取专家信息
  * @return {[type]} [description]
  */
 function getExpertlist(page) {
     page = page || 1;
-    var url = "http://wy.guahao.com/json/white/fastorder/expertlist?hdi=563cbb53-1294-4e46-a411-358dcff98f27000&hospitalId=448f9a19-8cd2-4ccf-a152-3930ec622d9f000&pageNo=" + pageNo;
+    var url = "http://wy.guahao.com/json/white/fastorder/expertlist?hdi=563cbb53-1294-4e46-a411-358dcff98f27000&hospitalId=448f9a19-8cd2-4ccf-a152-3930ec622d9f000&pageNo=" + page;
 
     var get = request({
         headers: headers,
         url: url,
-        // gzip: true
+        gzip: true
     }, function(error, response, body) {
         if (error) {
             return console.error(error);
         }
-        
-        async.mapLimit(brandIds, 100, function(brandId, callback) {
-            getSeries(brandId, callback);
-        }, function(err, result) {
-            console.log("抓取车系" + seriesIds.length + "个,开始抓取车型。。。");
-            async.mapLimit(seriesIds, 30, function(seriesId, callback) {
-                getModelSeries(seriesId, callback);
-            }, function(err, result) {
-                console.log("抓取车型" + modelCount + "个,抓取完毕!");
+        var json = JSON.parse(body);
+        var listData = json.data.list;
+
+        for (var i = 0; i < listData.length; i++) {
+            data = listData[i];
+
+            var tempData = {};
+            tempData.id = data.id; //id
+            tempData.name = data.name; //姓名
+            tempData.commentScore = data.commentScore; //评分
+            tempData.orderCount = data.orderCount; //量
+            tempData.hospitalId = data.hospitalId; //医院id
+            tempData.featureHL = data.featureHL; //擅长
+            tempData.photo = data.photo; //头像
+            tempData.sex = data.sex; //性别
+
+            var listDTO = data.expertHospDetpList[0].hospDeptNameDTOList; //排班
+
+            for (var dto in listDTO) {
+                dto = listDTO[dto];
+                if (dto["name"] === "专家门诊") {
+                    var officeId = dto["id"];
+                    tempData.officeId = officeId;
+                }
+            }
+            connection.query('INSERT INTO expert SET ?', tempData, function(err, result) {
+                if (err) {
+                    console.log(err);
+                }
             });
-        });
+
+            expertlist.push(tempData);
+        }
+
+        console.log(page);
+
+        if (listData.length === 12) {
+            getExpertlist(++page);
+            return;
+        }
+        console.log(expertlist.length);
     })
 }
 
@@ -49,70 +82,69 @@ function getExpertlist(page) {
  * @param  {[type]} brandId [description]
  * @return {[type]}        [description]
  */
-function getSeries(brandId, callback) {
+function getSchedule(expert, callback) {
+    var url = "http://wy.guahao.com/json/white/expert/shiftcase/?doctorId=" + expert.id + "&officeId=" + expert.officeId;
+    // console.log(url);
     var get = request({
-        headers: {
-            "Accept": "application/json, text/javascript, */*; q=0.01s",
-            "Origin": "https://www.che300.com",
-            "Referer": "https://www.che300.com/mcrl",
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 5.1.1; Nexus 6 Build/LYZ28E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/48.0.2564.23 Mobile Safari/537.36'
-        },
-        url: "https://dn-che300-meta.qbox.me/meta/c2c/series_brand" + brandId + ".json",
+        headers: headers,
+        url: url,
         gzip: true
     }, function(error, response, body) {
         if (error) {
-            addLog("brandId:" + brandId);
             return console.error(error);
         }
-        var data = JSON.parse(body);
-        for (var i in data) {
-            fs.appendFile("sql/gps_car_series.sql", "insert into gps_car_series(series_id,brand_id,seriers_name,index) values('" + data[i].key + "','" + brandId + "','" + data[i].value + "',0);\r\n", function(err) {
-                if (err) throw err;
-            });
-            seriesIds.push(data[i].key);
-        }
-        callback(null, brandId);
-    });
-}
+        var json = JSON.parse(body);
+        console.log(json);
+        if (json.code === "0") {
 
-var modelCount = 0;
-/**
- * [getModelSeries description]
- * @param  {[type]} series [description]
- * @return {[type]}        [description]
- */
-function getModelSeries(seriesId, callback) {
-    var get = request({
-        headers: {
-            "Accept": "application/json, text/javascript, */*; q=0.01s",
-            "Origin": "https://www.che300.com",
-            "Referer": "https://www.che300.com/mcrl",
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 5.1.1; Nexus 6 Build/LYZ28E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/48.0.2564.23 Mobile Safari/537.36'
-        },
-        url: "https://dn-che300-meta.qbox.me/meta/c2c/model_series" + seriesId + ".json",
-        gzip: true
-    }, function(error, response, body) {
-        if (error) {
-            addLog("seriesId:" + seriesId);
-            return console.error(error);
-        }
-        var data = JSON.parse(body);
-        for (var i in data) {
-            modelCount++;
-            fs.appendFile("sql/gps_car_model.sql", "insert into gps_car_model(model_id,series_id,model_name,year,index) values('" + data[i].key + "','" + seriesId + "','" + data[i].value + "'," + data[i].year + ",0);\r\n", function(err) {
-                if (err) throw err;
-            });
+
+            var schedules = json.data[0].scheduleData.schedules;
+            if (schedules) {
+
+                for (var schedule in schedules) {
+
+                    schedule = schedules[schedule].morning;
+
+                    var new_schedule = {
+                        apm: schedule.apm,
+                        date: schedule.date,
+                        price: schedule.price,
+                        expert_id: expert.id
+                    };
+
+                    connection.query('INSERT INTO schedule SET ?', new_schedule, function(err, result) {
+                        if (err) {
+                            console.log(err);
+                        }
+                    });
+                }
+            }
         }
         setTimeout(function() {
-            callback(null, seriesId);
-        }, 500);
+            callback(null, expert);
+        }, 1000);
     });
 }
 
-function addLog(message) {
-    fs.appendFile("log.log", message + "\r\n", function(error) {
+var mysql = require('mysql');
+var connection = mysql.createConnection({
+    host: 'localhost',
+    user: 'root',
+    password: 'AAA111aaa',
+    database: 'registration'
+});
+connection.connect();
+
+connection.query('SELECT id,officeId FROM `expert`', function(err, rows, fields) {
+    if (err) throw err;
+
+    var expert_list = rows;
+    async.mapLimit(expert_list, 1, function(expert, callback) {
+        getSchedule(expert, callback);
+    }, function(err, result) {
 
     });
-}
+});
 
-getCar();
+
+// getExpertlist();
